@@ -468,30 +468,21 @@ const Watch = struct {
     fn init() !Watch {
         return .{
             .fs_watch = if (@TypeOf(std.Build.Watch) != void) try std.Build.Watch.init() else {},
-            .supports_fs_watch = @TypeOf(std.Build.Watch) != void and shared.BuildOnSaveSupport.isSupportedRuntime(builtin.zig_version) == .supported,
+            .supports_fs_watch = false,
             .manual_event = .{},
             .steps = &.{},
         };
     }
 
-    fn update(w: *Watch, gpa: Allocator, steps: []const *Step) !void {
-        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch) {
-            return try w.fs_watch.update(gpa, steps);
-        }
+    fn update(w: *Watch, _: Allocator, steps: []const *Step) !void {
         w.steps = steps;
     }
 
     fn trigger(w: *Watch) void {
-        if (w.supports_fs_watch) {
-            @panic("received manualy filesystem event even though std.Build.Watch is supported");
-        }
         w.manual_event.set();
     }
 
     fn wait(w: *Watch, gpa: Allocator, timeout: std.Build.Watch.Timeout) !std.Build.Watch.WaitResult {
-        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch) {
-            return try w.fs_watch.wait(gpa, timeout);
-        }
         switch (timeout) {
             .none => w.manual_event.wait(),
             .ms => |ms| w.manual_event.timedWait(@as(u64, ms) * std.time.ns_per_ms) catch return .timeout,

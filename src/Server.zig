@@ -765,7 +765,7 @@ const Workspace = struct {
 
         if (args.server.runtime_zig_version) |runtime_zig_version| {
             workspace.build_on_save_mode = switch (BuildOnSaveSupport.isSupportedRuntime(runtime_zig_version)) {
-                .supported => .watch,
+                .supported => .manual,
                 // If if build on save has been explicitly enabled, fallback to the implementation with manual updates
                 else => if (args.server.config.enable_build_on_save orelse false) .manual else null,
             };
