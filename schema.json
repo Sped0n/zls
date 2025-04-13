@@ -32,6 +32,11 @@
             },
             "default": []
         },
+        "build_on_save_alternative_watch": {
+            "description": "Whether to force zls to use the alternative watch mode for build-on-save. Works on some systems where the default watch mode is not supported.",
+            "type": "boolean",
+            "default": false
+        },
         "semantic_tokens": {
             "description": "Set level of semantic tokens. `partial` only includes information that requires semantic analysis.",
             "type": "string",

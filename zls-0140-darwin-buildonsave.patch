@@ -1,0 +1,170 @@
+diff --git a/schema.json b/schema.json
+index 9791e4b..90a96ba 100644
+--- a/schema.json
++++ b/schema.json
+@@ -32,6 +32,11 @@
+             },
+             "default": []
+         },
++        "build_on_save_alternative_watch": {
++            "description": "Whether to force zls to use the alternative watch mode for build-on-save. Works on some systems where the default watch mode is not supported.",
++            "type": "boolean",
++            "default": false
++        },
+         "semantic_tokens": {
+             "description": "Set level of semantic tokens. `partial` only includes information that requires semantic analysis.",
+             "type": "string",
+diff --git a/src/Config.zig b/src/Config.zig
+index 7268a5a..5019714 100644
+--- a/src/Config.zig
++++ b/src/Config.zig
+@@ -23,6 +23,9 @@ enable_build_on_save: ?bool = null,
+ /// If the `build.zig` has declared a 'check' step, it will be preferred over the default 'install' step.
+ build_on_save_args: []const []const u8 = &.{},
+ 
++/// Whether to force zls to use the alternative watch mode for build-on-save. Works on some systems where the default watch mode is not supported.
++build_on_save_alternative_watch: bool = false,
++
+ /// Set level of semantic tokens. `partial` only includes information that requires semantic analysis.
+ semantic_tokens: enum {
+     none,
+diff --git a/src/Server.zig b/src/Server.zig
+index 13ae7d1..e71fbcd 100644
+--- a/src/Server.zig
++++ b/src/Server.zig
+@@ -765,7 +765,7 @@ const Workspace = struct {
+ 
+         if (args.server.runtime_zig_version) |runtime_zig_version| {
+             workspace.build_on_save_mode = switch (BuildOnSaveSupport.isSupportedRuntime(runtime_zig_version)) {
+-                .supported => .watch,
++                .supported => if (args.server.config.build_on_save_alternative_watch) .manual else .watch,
+                 // If if build on save has been explicitly enabled, fallback to the implementation with manual updates
+                 else => if (args.server.config.enable_build_on_save orelse false) .manual else null,
+             };
+@@ -801,6 +801,7 @@ const Workspace = struct {
+             .allocator = args.server.allocator,
+             .workspace_path = workspace_path,
+             .build_on_save_args = args.server.config.build_on_save_args,
++            .alternative_mode = args.server.config.build_on_save_alternative_watch,
+             .check_step_only = args.server.config.enable_build_on_save == null,
+             .zig_exe_path = zig_exe_path,
+             .zig_lib_path = zig_lib_path,
+diff --git a/src/build_runner/0.14.0.zig b/src/build_runner/0.14.0.zig
+index d3480df..7d7ea44 100644
+--- a/src/build_runner/0.14.0.zig
++++ b/src/build_runner/0.14.0.zig
+@@ -115,6 +115,7 @@ pub fn main() !void {
+     var output_tmp_nonce: ?[16]u8 = null;
+     var debounce_interval_ms: u16 = 50;
+     var watch = false;
++    var watch_alternative_mode = false;
+     var check_step_only = false;
+ 
+     while (nextArg(args, &arg_idx)) |arg| {
+@@ -239,6 +240,8 @@ pub fn main() !void {
+                 // prominent_compile_errors = true;
+             } else if (mem.eql(u8, arg, "--watch")) {
+                 watch = true;
++            } else if (mem.eql(u8, arg, "--watch-alternative-mode")) {
++                watch_alternative_mode = true;
+             } else if (mem.eql(u8, arg, "--check-only")) { // ZLS only
+                 check_step_only = true;
+             } else if (mem.eql(u8, arg, "-fincremental")) {
+@@ -375,7 +378,7 @@ pub fn main() !void {
+         return;
+     }
+ 
+-    var w = try Watch.init();
++    var w = try Watch.init(.{ .alternative_mode = watch_alternative_mode });
+ 
+     const message_thread = try std.Thread.spawn(.{}, struct {
+         fn do(ww: *Watch) void {
+@@ -462,34 +465,40 @@ fn markFailedStepsDirty(gpa: Allocator, all_steps: []const *Step) void {
+ const Watch = struct {
+     fs_watch: std.Build.Watch,
+     supports_fs_watch: bool,
++    alternative_mode: bool,
+     manual_event: std.Thread.ResetEvent,
+     steps: []const *Step,
+ 
+-    fn init() !Watch {
++    const InitOptions = struct {
++        alternative_mode: bool = false,
++    };
++
++    fn init(options: InitOptions) !Watch {
+         return .{
+             .fs_watch = if (@TypeOf(std.Build.Watch) != void) try std.Build.Watch.init() else {},
+             .supports_fs_watch = @TypeOf(std.Build.Watch) != void and shared.BuildOnSaveSupport.isSupportedRuntime(builtin.zig_version) == .supported,
++            .alternative_mode = options.alternative_mode,
+             .manual_event = .{},
+             .steps = &.{},
+         };
+     }
+ 
+     fn update(w: *Watch, gpa: Allocator, steps: []const *Step) !void {
+-        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch) {
++        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch and !w.alternative_mode) {
+             return try w.fs_watch.update(gpa, steps);
+         }
+         w.steps = steps;
+     }
+ 
+     fn trigger(w: *Watch) void {
+-        if (w.supports_fs_watch) {
++        if (w.supports_fs_watch and !w.alternative_mode) {
+             @panic("received manualy filesystem event even though std.Build.Watch is supported");
+         }
+         w.manual_event.set();
+     }
+ 
+     fn wait(w: *Watch, gpa: Allocator, timeout: std.Build.Watch.Timeout) !std.Build.Watch.WaitResult {
+-        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch) {
++        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch and !w.alternative_mode) {
+             return try w.fs_watch.wait(gpa, timeout);
+         }
+         switch (timeout) {
+diff --git a/src/features/diagnostics.zig b/src/features/diagnostics.zig
+index 110fd22..c6ccd60 100644
+--- a/src/features/diagnostics.zig
++++ b/src/features/diagnostics.zig
+@@ -442,6 +442,7 @@ pub const BuildOnSave = struct {
+         allocator: std.mem.Allocator,
+         workspace_path: []const u8,
+         build_on_save_args: []const []const u8,
++        alternative_mode: bool,
+         check_step_only: bool,
+         zig_exe_path: []const u8,
+         zig_lib_path: []const u8,
+@@ -465,12 +466,13 @@ pub const BuildOnSave = struct {
+         };
+         var argv: std.ArrayListUnmanaged([]const u8) = try .initCapacity(
+             options.allocator,
+-            base_args.len + options.build_on_save_args.len + @intFromBool(options.check_step_only),
++            base_args.len + options.build_on_save_args.len + @intFromBool(options.check_step_only) + @intFromBool(options.alternative_mode),
+         );
+         defer argv.deinit(options.allocator);
+ 
+         argv.appendSliceAssumeCapacity(base_args);
+         if (options.check_step_only) argv.appendAssumeCapacity("--check-only");
++        if (options.alternative_mode) argv.appendAssumeCapacity("--watch-alternative-mode");
+         argv.appendSliceAssumeCapacity(options.build_on_save_args);
+ 
+         child_process.* = .init(argv.items, options.allocator);
+diff --git a/src/tools/config.json b/src/tools/config.json
+index e6a4f59..1084595 100644
+--- a/src/tools/config.json
++++ b/src/tools/config.json
+@@ -30,6 +30,12 @@
+             "type": "[]const []const u8",
+             "default": []
+         },
++        {
++            "name": "build_on_save_alternative_watch",
++            "description": "Whether to force zls to use the alternative watch mode for build-on-save. Works on some systems where the default watch mode is not supported.",
++            "type": "bool",
++            "default": false
++        },
+         {
+             "name": "semantic_tokens",
+             "description": "Set level of semantic tokens. `partial` only includes information that requires semantic analysis.",

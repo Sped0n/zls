@@ -765,7 +765,7 @@ const Workspace = struct {
 
         if (args.server.runtime_zig_version) |runtime_zig_version| {
             workspace.build_on_save_mode = switch (BuildOnSaveSupport.isSupportedRuntime(runtime_zig_version)) {
-                .supported => .watch,
+                .supported => if (args.server.config.build_on_save_alternative_watch) .manual else .watch,
                 // If if build on save has been explicitly enabled, fallback to the implementation with manual updates
                 else => if (args.server.config.enable_build_on_save orelse false) .manual else null,
             };
@@ -801,6 +801,7 @@ const Workspace = struct {
             .allocator = args.server.allocator,
             .workspace_path = workspace_path,
             .build_on_save_args = args.server.config.build_on_save_args,
+            .alternative_mode = args.server.config.build_on_save_alternative_watch,
             .check_step_only = args.server.config.enable_build_on_save == null,
             .zig_exe_path = zig_exe_path,
             .zig_lib_path = zig_lib_path,

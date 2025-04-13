@@ -444,6 +444,7 @@ pub const BuildOnSave = struct {
         allocator: std.mem.Allocator,
         workspace_path: []const u8,
         build_on_save_args: []const []const u8,
+        alternative_mode: bool,
         check_step_only: bool,
         zig_exe_path: []const u8,
         zig_lib_path: []const u8,
@@ -467,12 +468,13 @@ pub const BuildOnSave = struct {
         };
         var argv: std.ArrayListUnmanaged([]const u8) = try .initCapacity(
             options.allocator,
-            base_args.len + options.build_on_save_args.len + @intFromBool(options.check_step_only),
+            base_args.len + options.build_on_save_args.len + @intFromBool(options.check_step_only) + @intFromBool(options.alternative_mode),
         );
         defer argv.deinit(options.allocator);
 
         argv.appendSliceAssumeCapacity(base_args);
         if (options.check_step_only) argv.appendAssumeCapacity("--check-only");
+        if (options.alternative_mode) argv.appendAssumeCapacity("--watch-alternative-mode");
         argv.appendSliceAssumeCapacity(options.build_on_save_args);
 
         child_process.* = .init(argv.items, options.allocator);

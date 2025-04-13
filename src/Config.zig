@@ -23,6 +23,9 @@ enable_build_on_save: ?bool = null,
 /// If the `build.zig` has declared a 'check' step, it will be preferred over the default 'install' step.
 build_on_save_args: []const []const u8 = &.{},
 
+/// Whether to force zls to use the alternative watch mode for build-on-save. Works on some systems where the default watch mode is not supported.
+build_on_save_alternative_watch: bool = false,
+
 /// Set level of semantic tokens. `partial` only includes information that requires semantic analysis.
 semantic_tokens: enum {
     none,

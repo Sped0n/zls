@@ -115,6 +115,7 @@ pub fn main() !void {
     var output_tmp_nonce: ?[16]u8 = null;
     var debounce_interval_ms: u16 = 50;
     var watch = false;
+    var watch_alternative_mode = false;
     var check_step_only = false;
 
     while (nextArg(args, &arg_idx)) |arg| {
@@ -239,6 +240,8 @@ pub fn main() !void {
                 // prominent_compile_errors = true;
             } else if (mem.eql(u8, arg, "--watch")) {
                 watch = true;
+            } else if (mem.eql(u8, arg, "--watch-alternative-mode")) {
+                watch_alternative_mode = true;
             } else if (mem.eql(u8, arg, "--check-only")) { // ZLS only
                 check_step_only = true;
             } else if (mem.eql(u8, arg, "-fincremental")) {
@@ -375,7 +378,7 @@ pub fn main() !void {
         return;
     }
 
-    var w = try Watch.init();
+    var w = try Watch.init(.{ .alternative_mode = watch_alternative_mode });
 
     const message_thread = try std.Thread.spawn(.{}, struct {
         fn do(ww: *Watch) void {
@@ -462,34 +465,40 @@ fn markFailedStepsDirty(gpa: Allocator, all_steps: []const *Step) void {
 const Watch = struct {
     fs_watch: std.Build.Watch,
     supports_fs_watch: bool,
+    alternative_mode: bool,
     manual_event: std.Thread.ResetEvent,
     steps: []const *Step,
 
-    fn init() !Watch {
+    const InitOptions = struct {
+        alternative_mode: bool = false,
+    };
+
+    fn init(options: InitOptions) !Watch {
         return .{
             .fs_watch = if (@TypeOf(std.Build.Watch) != void) try std.Build.Watch.init() else {},
             .supports_fs_watch = @TypeOf(std.Build.Watch) != void and shared.BuildOnSaveSupport.isSupportedRuntime(builtin.zig_version) == .supported,
+            .alternative_mode = options.alternative_mode,
             .manual_event = .{},
             .steps = &.{},
         };
     }
 
     fn update(w: *Watch, gpa: Allocator, steps: []const *Step) !void {
-        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch) {
+        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch and !w.alternative_mode) {
             return try w.fs_watch.update(gpa, steps);
         }
         w.steps = steps;
     }
 
     fn trigger(w: *Watch) void {
-        if (w.supports_fs_watch) {
+        if (w.supports_fs_watch and !w.alternative_mode) {
             @panic("received manualy filesystem event even though std.Build.Watch is supported");
         }
         w.manual_event.set();
     }
 
     fn wait(w: *Watch, gpa: Allocator, timeout: std.Build.Watch.Timeout) !std.Build.Watch.WaitResult {
-        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch) {
+        if (@TypeOf(std.Build.Watch) != void and w.supports_fs_watch and !w.alternative_mode) {
             return try w.fs_watch.wait(gpa, timeout);
         }
         switch (timeout) {
